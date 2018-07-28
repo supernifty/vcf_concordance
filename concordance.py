@@ -38,22 +38,24 @@ def make_intervals(bed):
     chr, start, finish = fields[:3]
     if chr not in intervals:
       intervals[chr] = intervaltree.IntervalTree()
+    if len(intervals[chr][int(start):int(finish)]) > 0:
+      logging.info('overlap at %s %s %s', chr, start, finish)
     intervals[chr][int(start):int(finish)] = True
     total += int(finish) - int(start)
     if (idx + 1) % 100000 == 0:
       logging.debug('%i lines...', idx + 1)
 
   logging.info('filtering to %i bases', total)
-  return intervals
+  return (total, intervals)
 
-def main(vcfs, samples, target, max_dp, snvs_only, bed):
+def main(vcfs, samples, target, max_dp, snvs_only, bed, per_mb, min_agreement):
   logging.info('starting...')
 
   variants = {}
   ranges = {'max_dp': 0, 'min_dp': 1e9, 'max_af': 0, 'min_af': 1.0 }
 
   if bed is not None:
-    intervals = make_intervals(bed)
+    size, intervals = make_intervals(bed)
 
   for sample, vcf in zip(samples, vcfs):
     logging.info('reading %s from %s...', sample, vcf)
@@ -119,7 +121,7 @@ def main(vcfs, samples, target, max_dp, snvs_only, bed):
       af_min, dp_min = [float(x) for x in cell.split('|')]
       if af > af_min and dp > dp_min:
         totals[cell] += 1
-        if count == len(vcfs):
+        if count >= min_agreement:
           counts[cell] += 1
 
   sys.stdout.write('\n'.join(['{}\t{}'.format(k, ranges[k]) for k in ranges]))
@@ -144,8 +146,11 @@ def main(vcfs, samples, target, max_dp, snvs_only, bed):
         heatmap[idx] = 0
         ann_row[idx] = '0'
       else:
-        heatmap[idx] = counts['{}|{}'.format(af, dp)] / totals['{}|{}'.format(af, dp)] * 100
-        ann_row[idx] = '{}%\n{}\n{}'.format(int(heatmap[idx]), counts['{}|{}'.format(af, dp)], totals['{}|{}'.format(af, dp)])
+        heatmap[idx] = counts['{}|{}'.format(af, dp)] / totals['{}|{}'.format(af, dp)] * 100 # determines colour
+        if bed is not None and per_mb:
+          ann_row[idx] = '{}%\n{:.1f}\n{:.1f}'.format(int(heatmap[idx]), 1000000 * counts['{}|{}'.format(af, dp)] / size, 1000000 * totals['{}|{}'.format(af, dp)] / size) # what's displayed
+        else:
+          ann_row[idx] = '{}%\n{}\n{}'.format(int(heatmap[idx]), counts['{}|{}'.format(af, dp)], totals['{}|{}'.format(af, dp)]) # what's displayed
     series = pd.Series(data=[dp] + heatmap, index=df.columns)
     ann_series = pd.Series(data=ann_row, index=ann.columns)
     df = df.append(series, ignore_index=True)
@@ -153,9 +158,12 @@ def main(vcfs, samples, target, max_dp, snvs_only, bed):
 
   df.set_index('DP', inplace=True)
   logging.info('plotting...')
-  plt.figure(figsize =FIGSIZE )
+  plt.figure(figsize=FIGSIZE )
   plot = sns.heatmap(df, annot=ann, fmt='')
-  plot.set(xlabel='Minimum AF', ylabel='Minimum DP', title='Concordance % for {}'.format(', '.join(samples)))
+  if bed is not None and per_mb:
+    plot.set(xlabel='Minimum AF', ylabel='Minimum DP', title='Concordance % and muts/Mb for {}'.format(', '.join(samples)))
+  else:
+    plot.set(xlabel='Minimum AF', ylabel='Minimum DP', title='Concordance % for {}'.format(', '.join(samples)))
   figure = plot.get_figure()
   figure.savefig(target)
 
@@ -170,10 +178,16 @@ if __name__ == '__main__':
   parser.add_argument('--verbose', action='store_true', help='more logging')
   parser.add_argument('--snvs_only', action='store_true', help='exclude indels')
   parser.add_argument('--bed', required=False, help='limit to provided regions')
+  parser.add_argument('--per_mb', action='store_true', help='show per mb (if bed file included)')
+  parser.add_argument('--min_agreement', required=False, type=int, help='minimum number of vcfs that must agree (default is all)')
   args = parser.parse_args()
   if args.verbose:
     logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s', level=logging.DEBUG)
   else:
     logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s', level=logging.INFO)
 
-  main(args.vcfs, args.samples, args.target, args.max_dp, args.snvs_only, args.bed)
+  if args.min_agreement is None:
+    min_agreement = len(args.vcfs)
+  else:
+    min_agreement = args.min_agreement
+  main(args.vcfs, args.samples, args.target, args.max_dp, args.snvs_only, args.bed, args.per_mb, min_agreement)

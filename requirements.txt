@@ -1,3 +1,5 @@
 cyvcf2
 intervaltree
+numpy
+pandas
 seaborn

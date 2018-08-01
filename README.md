@@ -1,6 +1,6 @@
 # vcf_concordance
 
-Calculate vcf concordance at different levels of AF and DP. This is useful if you have replicates and want to determine a good AF and/or DP threshold, or assign a confidence level to reported variants.
+Calculate vcf concordance at different levels of AF and DP and generate a heatmap. This is useful if you have replicates and want to determine a good AF and/or DP threshold, or assign a confidence level to reported variants.
 
 ## Installation
 ```

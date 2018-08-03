@@ -14,6 +14,7 @@ mpl.use('Agg')
 
 import matplotlib.pyplot as plt
 plt.rc('savefig', dpi=300)
+import matplotlib_venn
 
 import numpy as np
 import pandas as pd
@@ -31,7 +32,6 @@ FIGSIZE = (20, 16)
 
 USE_AD=True
 CHECK_GENOTYPE=True
-COMBINATIONS=True
 
 def make_intervals(bed):
   intervals = {}
@@ -54,7 +54,7 @@ def make_intervals(bed):
   logging.info('filtering to %i bases', total)
   return (total, intervals)
 
-def main(vcfs, samples, heatmap_target, snvs_only, bed, per_mb, min_agreement, max_dp, max_af, min_dps, vcf_filter):
+def main(vcfs, samples, heatmap_target, snvs_only, bed, per_mb, min_agreement, max_dp, max_af, min_dps, vcf_filter, venn_target):
   logging.info('starting...')
 
   variants = {}
@@ -106,11 +106,18 @@ def main(vcfs, samples, heatmap_target, snvs_only, bed, per_mb, min_agreement, m
       if variant.format("DP") is not None:
         dp = variant.format("DP")[sample_id][0]
       else:
-        dp = variant.INFO["DP"]
-        
-      #else:
-      #  logging.info('%s: variant %i has no DP', vcf, variant_count + 1)
-      #  continue
+        try:
+          dp = variant.INFO["DP"]
+        except KeyError:
+          # try dpi
+          if variant.format("DPI") is not None:
+            dp = variant.format("DPI")[sample_id][0]
+          else:
+            try:
+              dp = variant.INFO["DPI"]
+            except KeyError:
+              logging.warn('%s: %s %s has no DP or DPI', vcf, variant.CHROM, variant.POS)
+              dp = 0
 
       if dp < min_dp:
         skipped_dp += 1
@@ -148,8 +155,8 @@ def main(vcfs, samples, heatmap_target, snvs_only, bed, per_mb, min_agreement, m
   if len(variants) == 0:
     logging.fatal('No valid variants found')
 
-  if COMBINATIONS:
-    logging.info('Calculating combination counts...')
+  if venn_target:
+    logging.info('Calculating overlaps...')
     counts = collections.defaultdict(int)
     for variant in variants:
       sample_ids = variants[variant][2]
@@ -160,6 +167,43 @@ def main(vcfs, samples, heatmap_target, snvs_only, bed, per_mb, min_agreement, m
     for key in sorted(counts):
       sys.stdout.write('{}\t{}\t{:.1f}\n'.format(key.ljust(padding), counts[key], 100. * counts[key] / len(variants)))
     sys.stdout.write('{}\t{}\t{:.1f}\n'.format('TOTAL'.ljust(padding), len(variants), 100.0))
+
+    # make venn diagram if sample count is 2 or 3
+    if len(samples) == 2:
+      logging.info('Generating two sample venn diagram %s...', venn_target)
+      fig = plt.figure()
+      matplotlib_venn.venn2(subsets=(
+          counts[samples[0]], 
+          counts[samples[1]], 
+          counts['{},{}'.format(samples[0], samples[1])]), 
+        set_labels=(
+          samples[0], 
+          samples[1]))
+      plt.title('Overlap for samples {}'.format(', '.join(samples)))
+      fig.savefig(venn_target)
+
+    elif len(samples) == 3:
+      logging.info('Generating three sample venn diagram %s...', venn_target)
+      fig = plt.figure()
+      #Abc, aBc, ABc, abC, AbC, aBC, ABC
+      matplotlib_venn.venn3(subsets=(
+          counts[samples[0]], 
+          counts[samples[1]], 
+          counts['{},{}'.format(samples[0], samples[1])],
+          counts[samples[2]], 
+          counts['{},{}'.format(samples[0], samples[2])],
+          counts['{},{}'.format(samples[1], samples[2])],
+          counts['{},{},{}'.format(samples[0], samples[1], samples[2])],
+        ),
+        set_labels=(
+          samples[0], 
+          samples[1], 
+          samples[2]))
+      plt.title('Overlap for samples {}'.format(', '.join(samples)))
+      fig.savefig(venn_target)
+
+    else:
+      logging.warn('Venn diagram not available for %i samples', len(samples))
 
   if heatmap_target is not None:
     logging.info('Generating heatmap file %s', heatmap_target)
@@ -233,7 +277,8 @@ if __name__ == '__main__':
   parser = argparse.ArgumentParser(description='Assess MSI')
   parser.add_argument('--vcfs', required=True, nargs='+', help='vcfs')
   parser.add_argument('--samples', required=True, nargs='+', help='vcfs')
-  parser.add_argument('--heatmap', required=False, help='image')
+  parser.add_argument('--heatmap', required=False, help='heatmap image')
+  parser.add_argument('--venn', required=False, help='venn image')
   parser.add_argument('--max_dp', required=False, type=int, default=400, help='max plot dp')
   parser.add_argument('--max_af', required=False, type=float, default=0.5, help='max plot af')
   parser.add_argument('--verbose', action='store_true', help='more logging')
@@ -253,4 +298,4 @@ if __name__ == '__main__':
     min_agreement = len(args.vcfs)
   else:
     min_agreement = args.min_agreement
-  main(args.vcfs, args.samples, args.heatmap, args.snvs_only, args.bed, args.per_mb, min_agreement, args.max_dp, args.max_af, args.min_dps, args.vcf_filter)
+  main(args.vcfs, args.samples, args.heatmap, args.snvs_only, args.bed, args.per_mb, min_agreement, args.max_dp, args.max_af, args.min_dps, args.vcf_filter, args.venn)

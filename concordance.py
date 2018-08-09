@@ -22,12 +22,6 @@ import seaborn as sns
 
 import intervaltree
 
-rc={'font.size': 10, 'axes.labelsize': 10, 'legend.fontsize': 10.0, 'axes.titlesize': 10, 'xtick.labelsize': 10, 'ytick.labelsize': 10}
-sns.set(rc=rc)
-
-#AFS = [0., 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5]
-#AFS = [0., 0.025, 0.05, 0.075, 0.1, 0.125, 0.15, 0.175, 0.2, 0.225, 0.25, 0.275, 0.3, 0.325, 0.35, 0.375, 0.4, 0.425, 0.45, 0.475, 0.5]
-#DPS = [0, 20, 40, 60, 80, 100, 120, 140, 160, 180, 200, 220, 240, 260, 280, 300, 320, 340, 360, 380, 400]
 FIGSIZE = (20, 16)
 
 USE_AD=True
@@ -54,8 +48,11 @@ def make_intervals(bed):
   logging.info('filtering to %i bases', total)
   return (total, intervals)
 
-def main(vcfs, samples, heatmap_target, snvs_only, bed, per_mb, min_agreement, max_dp, max_af, min_dps, vcf_filter, venn_target):
+def main(vcfs, samples, heatmap_target, snvs_only, bed, per_mb, min_agreement, max_dp, max_af, min_dps, vcf_filter, venn_target, venn_dp, venn_af, heatmap_intervals, font_size=10):
   logging.info('starting...')
+
+  rc={'font.size': font_size, 'axes.labelsize': font_size, 'legend.fontsize': font_size, 'axes.titlesize': font_size, 'xtick.labelsize': font_size, 'ytick.labelsize': font_size}
+  sns.set(rc=rc)
 
   variants = {}
   ranges = {'max_dp': 0, 'min_dp': 1e9, 'max_af': 0, 'min_af': 1.0 }
@@ -97,7 +94,8 @@ def main(vcfs, samples, heatmap_target, snvs_only, bed, per_mb, min_agreement, m
       if CHECK_GENOTYPE:
         genotype = variant.gt_types[sample_id]
         logging.debug(genotype)
-        if genotype == 0 or genotype == 3:
+        # check gt 0,1,2,3==HOM_REF, HET, UNKNOWN, HOM_ALT
+        if genotype == 0 or genotype == 2:
           logging.debug('%s: skipped due to hom ref genotype %s %s', vcf, variant.CHROM, variant.POS)
           skipped_gt += 1
           continue
@@ -159,9 +157,10 @@ def main(vcfs, samples, heatmap_target, snvs_only, bed, per_mb, min_agreement, m
     logging.info('Calculating overlaps...')
     counts = collections.defaultdict(int)
     for variant in variants:
-      sample_ids = variants[variant][2]
-      key = ','.join([samples[id] for id in sample_ids])
-      counts[key] += 1
+      dp, af, sample_ids = variants[variant]
+      if (venn_dp is None or dp >= venn_dp) and (venn_af is None or af >= venn_af):
+        key = ','.join([samples[id] for id in sample_ids])
+        counts[key] += 1
     padding = max([len(key) for key in counts])
     sys.stdout.write('{}\t{}\t{}\n'.format('Samples'.ljust(padding), 'Count', '%'))
     for key in sorted(counts):
@@ -211,8 +210,8 @@ def main(vcfs, samples, heatmap_target, snvs_only, bed, per_mb, min_agreement, m
     counts = {}
     totals = {}
   
-    afs = [round(x, 3) for x in np.linspace(0, max_af, 21, endpoint=True)]
-    dps = [round(x, 0) for x in np.linspace(0, max_dp, 21, endpoint=True)]
+    afs = [round(x, 3) for x in np.linspace(0, max_af, heatmap_intervals + 1, endpoint=True)]
+    dps = [round(x, 0) for x in np.linspace(0, max_dp, heatmap_intervals + 1, endpoint=True)]
     for af in afs:
       for dp in dps:
         counts['{}|{}'.format(af, dp)] = 0
@@ -278,7 +277,10 @@ if __name__ == '__main__':
   parser.add_argument('--vcfs', required=True, nargs='+', help='vcfs')
   parser.add_argument('--samples', required=True, nargs='+', help='vcfs')
   parser.add_argument('--heatmap', required=False, help='heatmap image')
+  parser.add_argument('--heatmap_intervals', required=False, type=int, default=20, help='number of intervals on heatmap')
   parser.add_argument('--venn', required=False, help='venn image')
+  parser.add_argument('--venn_dp', required=False, type=int, help='venn minimum dp')
+  parser.add_argument('--venn_af', required=False, type=float, help='venn minimum af')
   parser.add_argument('--max_dp', required=False, type=int, default=400, help='max plot dp')
   parser.add_argument('--max_af', required=False, type=float, default=0.5, help='max plot af')
   parser.add_argument('--verbose', action='store_true', help='more logging')
@@ -288,6 +290,7 @@ if __name__ == '__main__':
   parser.add_argument('--min_agreement', required=False, type=int, help='minimum number of vcfs that must agree (default is all)')
   parser.add_argument('--min_dps', required=False, nargs='+', type=int, help='dp thresholds for vcfs')
   parser.add_argument('--vcf_filter', action='store_true', help='if true, filter on PASS')
+  parser.add_argument('--font_size', required=False, type=int, default=10, help='font size on graph')
   args = parser.parse_args()
   if args.verbose:
     logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s', level=logging.DEBUG)
@@ -298,4 +301,4 @@ if __name__ == '__main__':
     min_agreement = len(args.vcfs)
   else:
     min_agreement = args.min_agreement
-  main(args.vcfs, args.samples, args.heatmap, args.snvs_only, args.bed, args.per_mb, min_agreement, args.max_dp, args.max_af, args.min_dps, args.vcf_filter, args.venn)
+  main(args.vcfs, args.samples, args.heatmap, args.snvs_only, args.bed, args.per_mb, min_agreement, args.max_dp, args.max_af, args.min_dps, args.vcf_filter, args.venn, args.venn_dp, args.venn_af, args.heatmap_intervals, args.font_size)
